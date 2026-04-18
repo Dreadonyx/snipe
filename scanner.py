@@ -1,10 +1,14 @@
 import feedparser
 import httpx
 import html
+import logging
+from bs4 import BeautifulSoup
 from ddgs import DDGS
 from groq import Groq
 import json
 import re
+
+logger = logging.getLogger(__name__)
 
 HEADERS = {"User-Agent": "Snipe-Bot/1.0"}
 TIMEOUT = httpx.Timeout(10.0)
@@ -28,7 +32,7 @@ class Scanner:
                     items = self._scan_rss(client, source["url"], source["name"])
                     raw.extend(items)
                 except Exception:
-                    pass
+                    logger.warning("RSS feed failed: %s", source.get("name", source.get("url")))
 
         # Web search queries
         for query in self.config.get("sources", {}).get("search_queries", []):
@@ -36,7 +40,7 @@ class Scanner:
                 items = self._scan_web(query)
                 raw.extend(items)
             except Exception:
-                pass
+                logger.warning("Web search failed: %s", query)
 
         # Filter: only keep items that look like real opportunities
         opportunities = []
@@ -56,7 +60,6 @@ class Scanner:
             link = entry.get("link", "")
             snippet = ""
             if hasattr(entry, "summary"):
-                from bs4 import BeautifulSoup
                 snippet = BeautifulSoup(entry.summary, "lxml").get_text()[:300]
             if title and link:
                 items.append({"title": title, "url": link, "snippet": snippet, "source": source})
@@ -137,4 +140,5 @@ Return ONLY valid JSON."""
             return msg
 
         except Exception:
+            logger.warning("format_alert failed for: %s", item.get("url"))
             return None
