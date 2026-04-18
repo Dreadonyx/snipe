@@ -1,6 +1,7 @@
 import yaml
 import asyncio
 import logging
+import time
 from pathlib import Path
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -10,7 +11,16 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from database import Database
 from scanner import Scanner
 
-logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+# Rate limit: one manual scan per user per 5 minutes
+SCAN_COOLDOWN = 300
+_last_scan: dict[int, float] = {}
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
@@ -82,12 +92,28 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Send /start first to activate Snipe.")
         return
 
+    now = time.time()
+    last = _last_scan.get(chat_id, 0)
+    remaining = SCAN_COOLDOWN - (now - last)
+    if remaining > 0:
+        mins = int(remaining // 60) + 1
+        await update.message.reply_text(f"⏳ Please wait {mins} more minute(s) before scanning again.")
+        return
+
+    _last_scan[chat_id] = now
+
     await update.message.reply_text("🔍 Scanning for opportunities...")
     config = load_config()
     scanner = Scanner(config)
 
     found = 0
-    items = scanner.scan()
+    try:
+        items = scanner.scan()
+    except Exception:
+        logger.exception("scan() failed for chat_id=%s", chat_id)
+        await update.message.reply_text("❌ Scan failed. Try again in a bit.")
+        return
+
     for item in items:
         if db.is_seen(item["url"]):
             continue
@@ -104,7 +130,7 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 found += 1
                 await asyncio.sleep(0.5)
             except Exception:
-                pass
+                logger.exception("Failed to send alert to chat_id=%s", chat_id)
 
     if found == 0:
         await update.message.reply_text("😴 Nothing new right now. I'll alert you when something drops.")
@@ -119,10 +145,17 @@ async def scheduled_scan(app: Application):
     if not subscribers:
         return
 
+    logger.info("Scheduled scan starting — %d subscriber(s)", len(subscribers))
     config = load_config()
     scanner = Scanner(config)
-    items = scanner.scan()
 
+    try:
+        items = scanner.scan()
+    except Exception:
+        logger.exception("Scheduled scan() failed")
+        return
+
+    sent_total = 0
     for item in items:
         if db.is_seen(item["url"]):
             continue
@@ -140,9 +173,12 @@ async def scheduled_scan(app: Application):
                     parse_mode=ParseMode.MARKDOWN,
                     disable_web_page_preview=False
                 )
+                sent_total += 1
                 await asyncio.sleep(0.3)
             except Exception:
-                pass
+                logger.exception("Failed to send alert to chat_id=%s", chat_id)
+
+    logger.info("Scheduled scan done — %d alert(s) sent", sent_total)
 
 
 def main():
@@ -168,6 +204,7 @@ def main():
     )
     scheduler.start()
 
+    logger.info("Snipe starting — interval=%dm, subscribers=%d", interval, db.subscriber_count())
     print(f"🎯 Snipe is running — scanning every {interval} minutes")
     print(f"   Bot: t.me/Snipeoppbot")
     print(f"   Subscribers: {db.subscriber_count()}")
