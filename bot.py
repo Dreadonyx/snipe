@@ -194,7 +194,7 @@ def main():
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("scan", cmd_scan))
 
-    # Schedule auto-scan
+    # Schedule auto-scan — started inside post_init so the event loop is running
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         scheduled_scan,
@@ -202,14 +202,16 @@ def main():
         minutes=interval,
         args=[app],
     )
-    scheduler.start()
 
-    logger.info("Snipe starting — interval=%dm, subscribers=%d", interval, db.subscriber_count())
-    print(f"🎯 Snipe is running — scanning every {interval} minutes")
-    print(f"   Bot: t.me/Snipeoppbot")
-    print(f"   Subscribers: {db.subscriber_count()}")
-    print("   Press Ctrl+C to stop\n")
+    async def on_startup(application: Application):
+        scheduler.start()
+        logger.info("Snipe starting — interval=%dm, subscribers=%d", interval, db.subscriber_count())
+        print(f"🎯 Snipe is running — scanning every {interval} minutes")
+        print(f"   Bot: t.me/Snipeoppbot")
+        print(f"   Subscribers: {db.subscriber_count()}")
+        print("   Press Ctrl+C to stop\n")
 
+    app.post_init = on_startup
     app.run_polling(drop_pending_updates=True)
 
 
