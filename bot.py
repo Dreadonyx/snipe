@@ -1,3 +1,4 @@
+import os
 import yaml
 import asyncio
 import logging
@@ -26,8 +27,16 @@ CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 
 def load_config() -> dict:
-    with open(CONFIG_PATH) as f:
-        return yaml.safe_load(f)
+    # Locally: use config.yaml. On Railway: fall back to config.example.yaml
+    path = CONFIG_PATH if CONFIG_PATH.exists() else CONFIG_PATH.parent / "config.example.yaml"
+    with open(path) as f:
+        config = yaml.safe_load(f)
+    # Override secrets from environment variables (set these on Railway)
+    if token := os.environ.get("TELEGRAM_TOKEN"):
+        config.setdefault("telegram", {})["token"] = token
+    if groq_key := os.environ.get("GROQ_API_KEY"):
+        config.setdefault("groq", {})["api_key"] = groq_key
+    return config
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
