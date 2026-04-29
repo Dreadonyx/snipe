@@ -1,6 +1,22 @@
+# Secrets
 config.yaml
-snipe.db
+.env
+
+# Database
+*.db
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
 .venv/
 venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
