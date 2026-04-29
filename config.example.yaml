@@ -1,16 +1,17 @@
-telegram:
-  token: "YOUR_TELEGRAM_BOT_TOKEN"
+# ─── Snipe v2 Config ────────────────────────────────────────
+# Secrets (TELEGRAM_TOKEN, GROQ_API_KEY) go in .env — not here.
 
 groq:
-  api_key: "YOUR_GROQ_API_KEY"
   model: "llama-3.1-8b-instant"
 
-scan_interval: 30  # minutes
+# How often to scan for new opportunities (in minutes)
+scan_interval: 30
 
 profile:
   location: "Chennai, India"
   type: "student"
 
+# Keywords that define an opportunity worth alerting
 opportunity_keywords:
   - hackathon
   - internship
@@ -21,12 +22,19 @@ opportunity_keywords:
   - scholarship
   - bounty
   - challenge
+  - hiring
   - apply now
   - open applications
   - prize
+  - ctf
+  - capture the flag
+  - jeopardy ctf
+  - attack-defense
 
 sources:
   rss:
+    - name: "Unstop"
+      url: "https://unstop.com/api/public/opportunity/feeds?opportunity=hackathon"
     - name: "Devfolio"
       url: "https://devfolio.co/blog/rss.xml"
     - name: "TechCrunch Startups"
@@ -37,9 +45,14 @@ sources:
       url: "https://inc42.com/feed/"
     - name: "HackerNews"
       url: "https://news.ycombinator.com/rss"
+    - name: "CTFtime"
+      url: "https://ctftime.org/event/list/upcoming/rss/"
 
   search_queries:
     - "hackathon India students 2026 open registration"
     - "internship India tech students apply 2026"
     - "fellowship India students technology 2026"
     - "student competition prize money India 2026"
+    - "OpenAI competition students 2026"
+    - "Google student program 2026 apply"
+    - "CTF competition upcoming 2026"
