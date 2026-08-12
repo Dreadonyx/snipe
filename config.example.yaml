@@ -32,9 +32,17 @@ opportunity_keywords:
   - attack-defense
 
 sources:
+  # ── Unstop (dedicated paginated scanner) ──────────────────
+  unstop:
+    enabled: true
+    max_pages: 3            # pages per type per scan cycle (15 items/page)
+    types:
+      - hackathons
+      - competitions
+      - internships
+      - scholarships
+
   rss:
-    - name: "Unstop"
-      url: "https://unstop.com/api/public/opportunity/feeds?opportunity=hackathon"
     - name: "Devfolio"
       url: "https://devfolio.co/blog/rss.xml"
     - name: "TechCrunch Startups"

@@ -18,6 +18,18 @@ HEADERS = {"User-Agent": "Snipe-Bot/2.0"}
 TIMEOUT = httpx.Timeout(15.0)
 MAX_SOURCE_FAILURES = 3
 
+UNSTOP_API = "https://unstop.com/api/public/opportunity/search-result"
+UNSTOP_PER_PAGE = 15
+UNSTOP_PAGE_DELAY = 0.5  # seconds between paginated requests
+
+# Map Unstop opportunity types/subtypes to Snipe categories
+UNSTOP_TYPE_MAP = {
+    "hackathons": "hackathon",
+    "competitions": "competition",
+    "internships": "internship",
+    "scholarships": "grant",
+}
+
 
 @dataclass
 class ScanResult:
@@ -60,9 +72,7 @@ class Scanner:
                     continue
 
                 try:
-                    if "unstop.com/api" in source["url"]:
-                        items = self._scan_unstop(client, source["url"], name)
-                    elif "ctftime.org" in source["url"]:
+                    if "ctftime.org" in source["url"]:
                         items = self._scan_ctftime(client, source["url"], name)
                     else:
                         items = self._scan_rss(client, source["url"], name)
@@ -72,6 +82,26 @@ class Scanner:
                     report.errors += 1
                     self._source_failures[name] = self._source_failures.get(name, 0) + 1
                     logger.warning("RSS feed failed: %s — %s", name, e)
+
+            # Unstop (dedicated paginated scanner)
+            unstop_cfg = self.config.unstop
+            if unstop_cfg.get("enabled", False):
+                report.sources_checked += 1
+                if self._source_failures.get("Unstop", 0) >= MAX_SOURCE_FAILURES:
+                    logger.warning("Skipping Unstop (failed %d consecutive times)", self._source_failures["Unstop"])
+                else:
+                    try:
+                        items = self._scan_unstop_paginated(
+                            client,
+                            types=unstop_cfg.get("types", ["hackathons", "competitions", "internships", "scholarships"]),
+                            max_pages=unstop_cfg.get("max_pages", 3),
+                        )
+                        raw.extend(items)
+                        self._source_failures["Unstop"] = 0
+                    except Exception as e:
+                        report.errors += 1
+                        self._source_failures["Unstop"] = self._source_failures.get("Unstop", 0) + 1
+                        logger.warning("Unstop scan failed: %s", e)
 
         # Web search queries
         for query in self.config.sources.get("search_queries", []):
@@ -112,27 +142,71 @@ class Scanner:
                 items.append(ScanResult(title=title, url=link, snippet=snippet, source=source))
         return items
 
-    def _scan_unstop(self, client: httpx.Client, url: str, source: str) -> list[ScanResult]:
-        """Parse Unstop JSON API response."""
-        resp = self._get(client, url)
-        data = resp.json()
-        items = []
-        entries = data.get("data", {}).get("data", [])
-        if isinstance(entries, list):
-            for entry in entries[:20]:
-                title = entry.get("title", "").strip()
-                link = entry.get("public_url", "")
-                if not link:
-                    slug = entry.get("seo_url") or entry.get("slug", "")
-                    opp_type = entry.get("type", "competition")
-                    if slug:
-                        link = f"https://unstop.com/{opp_type}/{slug}"
-                snippet = entry.get("seo_details", {}).get("seo_description", "")
-                if not snippet:
-                    snippet = entry.get("subtitle", "") or entry.get("description", "")
-                snippet = BeautifulSoup(str(snippet), "lxml").get_text()[:300]
-                if title and link:
-                    items.append(ScanResult(title=title, url=link, snippet=snippet, source=source))
+    def _scan_unstop_paginated(
+        self, client: httpx.Client, types: list[str], max_pages: int = 3,
+    ) -> list[ScanResult]:
+        """Scan Unstop search API across multiple opportunity types with pagination."""
+        items: list[ScanResult] = []
+
+        for opp_type in types:
+            category = UNSTOP_TYPE_MAP.get(opp_type, "other")
+            source_label = f"Unstop ({opp_type})"
+
+            for page in range(1, max_pages + 1):
+                try:
+                    resp = self._get(client, UNSTOP_API, params={
+                        "opportunity": opp_type,
+                        "per_page": UNSTOP_PER_PAGE,
+                        "page": page,
+                    })
+                    data = resp.json()
+                except Exception as e:
+                    logger.warning("Unstop %s page %d failed: %s", opp_type, page, e)
+                    break  # stop paginating this type, continue with next
+
+                entries = data.get("data", {}).get("data", [])
+                if not isinstance(entries, list) or not entries:
+                    break  # no more results
+
+                for entry in entries:
+                    # Only include live, open-registration opportunities
+                    if entry.get("status") != "LIVE" or not entry.get("regn_open"):
+                        continue
+
+                    title = entry.get("title", "").strip()
+                    link = entry.get("seo_url", "")
+                    if not link:
+                        public_path = entry.get("public_url", "")
+                        if public_path:
+                            link = f"https://unstop.com/{public_path}"
+                    if not title or not link:
+                        continue
+
+                    # Build snippet from details HTML
+                    details = entry.get("details", "") or ""
+                    snippet = BeautifulSoup(str(details), "lxml").get_text()[:300].strip()
+
+                    # Determine Snipe category — internships have type=jobs, subtype=internships
+                    entry_cat = category
+                    if entry.get("type") == "jobs" and entry.get("subtype") == "internships":
+                        entry_cat = "internship"
+
+                    items.append(ScanResult(
+                        title=title, url=link, snippet=snippet,
+                        source=source_label, category=entry_cat,
+                    ))
+
+                # Check if we've reached the last page
+                last_page = data.get("data", {}).get("last_page", 1)
+                if page >= last_page:
+                    break
+
+                time.sleep(UNSTOP_PAGE_DELAY)
+
+            logger.debug("Unstop %s: collected %d items", opp_type,
+                         sum(1 for i in items if i.source == source_label))
+
+        logger.info("Unstop scan: %d items across %d types", len(items), len(types))
         return items
 
     def _scan_ctftime(self, client: httpx.Client, url: str, source: str) -> list[ScanResult]:
@@ -168,11 +242,11 @@ class Scanner:
 
     # ── HTTP helper with retry ───────────────────────────────
 
-    def _get(self, client: httpx.Client, url: str, retries: int = 3) -> httpx.Response:
+    def _get(self, client: httpx.Client, url: str, retries: int = 3, params: dict | None = None) -> httpx.Response:
         """GET with exponential backoff retry."""
         for attempt in range(retries):
             try:
-                resp = client.get(url)
+                resp = client.get(url, params=params)
                 resp.raise_for_status()
                 return resp
             except (httpx.HTTPError, httpx.TimeoutException) as e:

@@ -57,6 +57,7 @@ class Config:
         self.profile: dict = self._data.get("profile", {"location": "India", "type": "student"})
         self.keywords: list[str] = self._data.get("opportunity_keywords", [])
         self.sources: dict = self._data.get("sources", {})
+        self.unstop: dict = self.sources.get("unstop", {})
 
     def validate(self):
         """Raise ValueError if required config is missing."""
