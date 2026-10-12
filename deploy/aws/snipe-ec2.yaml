@@ -1,0 +1,158 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Single small EC2 host running the Snipe Telegram bot in Docker. Outbound-only
+  workload (long-polls Telegram), so the only inbound rule is SSH from one
+  admin IP; SSM Session Manager is the fallback when that IP changes.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: 1 EC2 (default VPC) -> docker container `snipe` -> Telegram/Groq/Unstop/Apify APIs; SQLite on root EBS via docker volume
+    must:
+      - one bot process per Telegram token (two pollers -> getUpdates Conflict)
+      - temporary host; copy /var/lib/docker/volumes/snipe-data before deleting the stack or data is lost
+    ref:
+      - README.md#deployment
+      - deploy/install.sh
+
+Parameters:
+  AdminSshCidr:
+    Type: String
+    Description: Your public IP as a /32 (for SSH). Find it with curl https://checkip.amazonaws.com
+    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/32$
+    ConstraintDescription: Must be a single IPv4 address in /32 form, e.g. 203.0.113.7/32
+  SshPublicKey:
+    Type: String
+    Description: OpenSSH public key material (contents of the .pub file)
+    AllowedPattern: ^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp256) [A-Za-z0-9+/=]+( .*)?$
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small]
+    Description: x86 only, to match the AMI below. t3.micro (1 GB) is enough with the swapfile install.sh adds.
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+    Description: Ubuntu 24.04 LTS (resolved at deploy time from Canonical's public SSM parameter)
+
+Resources:
+  DeployKeyPair:
+    Type: AWS::EC2::KeyPair
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: imported (not generated) so the same key serves AWS now and Oracle later; private key never leaves the admin machine
+    Properties:
+      KeyName: !Sub "${AWS::StackName}-deploy"
+      PublicKeyMaterial: !Ref SshPublicKey
+      Tags:
+        - Key: app
+          Value: snipe
+
+  BotSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: bot only makes outbound calls; no inbound service port exists
+        must:
+          - never open 22 (or anything) to 0.0.0.0/0
+    Properties:
+      GroupDescription: Snipe bot - SSH from admin IP only
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AdminSshCidr
+          Description: SSH from admin IP
+      Tags:
+        - Key: app
+          Value: snipe
+
+  SsmRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Session Manager break-glass access if the admin IP changes; AWS-managed core policy is the least-privilege SSM baseline
+        must:
+          - no aws:SourceAccount/SourceArn in trust; EC2 doesn't populate them -> AssumeRole AccessDenied (confused deputy N/A: profiles can't attach cross-account)
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Tags:
+        - Key: app
+          Value: snipe
+
+  SsmInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref SsmRole
+
+  BotLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: launch template carries IMDSv2-required and encrypted gp3 root, which plain Instance props express less cleanly
+        must:
+          - keep HttpTokens required (IMDSv2)
+          - keep root volume Encrypted
+    Properties:
+      LaunchTemplateData:
+        MetadataOptions:
+          HttpTokens: required
+          HttpPutResponseHopLimit: 1
+          HttpEndpoint: enabled
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 20
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: volume
+            Tags:
+              - Key: app
+                Value: snipe
+
+  BotInstance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: plain instance in the default VPC; EC2 simplified automatic recovery (on by default for t3) covers host failure
+        must:
+          - stateful (SQLite in docker volume on root disk); replacement loses data unless copied first
+        mutable: review-required
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref DeployKeyPair
+      IamInstanceProfile: !Ref SsmInstanceProfile
+      SecurityGroupIds:
+        - !GetAtt BotSecurityGroup.GroupId
+      LaunchTemplate:
+        LaunchTemplateId: !Ref BotLaunchTemplate
+        Version: !GetAtt BotLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-bot"
+        - Key: app
+          Value: snipe
+
+Outputs:
+  InstanceId:
+    Description: EC2 instance ID (use with aws ssm start-session)
+    Value: !Ref BotInstance
+  PublicIp:
+    Description: Public IPv4 address of the bot host
+    Value: !GetAtt BotInstance.PublicIp
+  SshCommand:
+    Description: SSH command using the deploy key
+    Value: !Sub "ssh -i ~/.ssh/snipe_deploy ubuntu@${BotInstance.PublicIp}"
