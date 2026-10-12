@@ -1,11 +1,18 @@
 # ─── Snipe v2 Config ────────────────────────────────────────
-# Secrets (TELEGRAM_TOKEN, GROQ_API_KEY) go in .env — not here.
+# Secrets (TELEGRAM_TOKEN, GROQ_API_KEY, APIFY_TOKEN) go in .env — not here.
 
 groq:
-  model: "llama-3.1-8b-instant"
+  model: "openai/gpt-oss-20b"   # llama-3.1-8b-instant was retired by Groq
+  reasoning_effort: low         # gpt-oss/qwen3 only — set to null for other models
 
 # How often to scan for new opportunities (in minutes)
 scan_interval: 30
+
+# Cap on new alerts per scan; the rest roll over to the next scan (avoids a flood on first run)
+max_alerts_per_scan: 15
+
+# Timezone for quiet hours and daily digests
+timezone: "Asia/Kolkata"
 
 profile:
   location: "Chennai, India"
@@ -35,16 +42,28 @@ sources:
   # ── Unstop (dedicated paginated scanner) ──────────────────
   unstop:
     enabled: true
-    max_pages: 3            # pages per type per scan cycle (15 items/page)
+    max_pages: 2            # pages per type per scan cycle (15 items/page, newest first)
     types:
       - hackathons
       - competitions
       - internships
       - scholarships
 
+  # ── LinkedIn events ──────────────────────────────────────
+  # LinkedIn hides event details behind a login wall, so details come from the
+  # Apify actor "maximedupre/linkedin-events" (pay per event, ~$2.70 / 1,000).
+  # Set APIFY_TOKEN in .env. Without it you still get event links, minus details.
+  linkedin:
+    enabled: true
+    interval_hours: 12      # LinkedIn runs are slow and billed, so not every scan
+    max_charge_usd: 0.05    # hard spending cap per run, split across queries
+    event_format: any       # any | virtual | in_person | hybrid
+    locations: ["India"]
+    queries:
+      - "hackathon"
+      - "tech workshop students"
+
   rss:
-    - name: "Devfolio"
-      url: "https://devfolio.co/blog/rss.xml"
     - name: "TechCrunch Startups"
       url: "https://techcrunch.com/category/startups/feed/"
     - name: "YourStory"
