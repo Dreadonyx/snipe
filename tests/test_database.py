@@ -9,8 +9,7 @@ def test_v0_database_is_migrated(tmp_path):
     path = tmp_path / "old.db"
     conn = sqlite3.connect(path)
     conn.executescript("""
-        CREATE TABLE seen (url TEXT PRIMARY KEY, title TEXT, category TEXT DEFAULT 'other',
-                           seen_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE seen (url TEXT PRIMARY KEY, title TEXT, seen_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE preferences (chat_id INTEGER PRIMARY KEY, categories TEXT NOT NULL DEFAULT '[]');
         INSERT INTO seen (url, title) VALUES ('https://a.example/x/', 'A');
         INSERT INTO seen (url, title) VALUES ('https://b.example/y?utm_source=rss', 'B');
@@ -58,3 +57,17 @@ def test_resubscribe_keeps_preferences(tmp_path):
     db.add_subscriber(1)
     assert db.is_subscribed(1) and json.loads(
         db.conn.execute("SELECT categories FROM preferences WHERE chat_id = 1").fetchone()[0]) == ["ctf"]
+
+
+def test_db_already_at_latest_version_still_gets_missing_columns(tmp_path):
+    # The deployed DB was stamped v2 before the "category" repair existed
+    path = tmp_path / "stamped.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE seen (url TEXT PRIMARY KEY, title TEXT, seen_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        PRAGMA user_version = 2;
+    """)
+    conn.close()
+    db = Database(path)
+    db.mark_seen("https://x", "X", "ctf", status="rejected")
+    assert db.get_stats()["total_rejected"] == 1
