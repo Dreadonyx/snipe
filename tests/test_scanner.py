@@ -171,7 +171,7 @@ def test_scan_combines_sources_filters_and_dedupes(make_config, no_sleep):
     config = make_config("""
         opportunity_keywords: [hackathon]
         sources:
-          unstop: {enabled: true, max_pages: 1, types: [hackathons]}
+          unstop: {enabled: true, search_terms: [], max_pages: 1, types: [hackathons]}
           rss:
             - {name: Blog, url: "https://blog.example/rss"}
             - {name: Blog mirror, url: "https://mirror.example/rss"}
@@ -196,7 +196,7 @@ def test_scan_combines_sources_filters_and_dedupes(make_config, no_sleep):
 
 @respx.mock
 def test_unstop_paginates_until_last_page(make_config, no_sleep):
-    config = make_config("sources: {unstop: {enabled: true, max_pages: 5, types: [hackathons]}}")
+    config = make_config("sources: {unstop: {enabled: true, search_terms: [], max_pages: 5, types: [hackathons]}}")
     route = respx.get(UNSTOP_API).mock(side_effect=[
         httpx.Response(200, json=unstop_page([unstop_entry(seo_url="https://unstop.com/a")], last_page=2)),
         httpx.Response(200, json=unstop_page([unstop_entry(seo_url="https://unstop.com/b")], last_page=2)),
@@ -311,7 +311,7 @@ def test_linkedin_search_survives_an_empty_query(make_config, monkeypatch):
 
 @respx.mock
 def test_unstop_interleaves_types_and_survives_one_failing(make_config, no_sleep):
-    config = make_config("sources: {unstop: {enabled: true, max_pages: 1, types: [hackathons, internships, scholarships]}}")
+    config = make_config("sources: {unstop: {enabled: true, search_terms: [], max_pages: 1, types: [hackathons, internships, scholarships]}}")
 
     def by_type(request):
         kind = request.url.params["opportunity"]
@@ -328,6 +328,76 @@ def test_unstop_interleaves_types_and_survives_one_failing(make_config, no_sleep
 
 @respx.mock
 def test_unstop_fully_down_counts_as_a_source_failure(make_config, no_sleep):
-    config = make_config("sources: {unstop: {enabled: true, max_pages: 1, types: [hackathons]}}")
+    config = make_config("sources: {unstop: {enabled: true, search_terms: [], max_pages: 1, types: [hackathons]}}")
     respx.get(UNSTOP_API).respond(503)
     assert Scanner(config).scan().errors == 1
+
+
+CTFTIME_EVENT = {
+    "title": "Securinets CTF Quals 2026", "ctftime_url": "https://ctftime.org/event/3364/",
+    "url": "https://ctf.securinets.tn/", "start": "2026-10-17T18:00:00+00:00",
+    "duration": {"days": 1, "hours": 12}, "format": "Jeopardy", "weight": 85.12,
+    "restrictions": "Open", "onsite": False, "location": "", "prizes": "",
+    "description": "Annual   quals.", "organizers": [{"name": "Securinets"}],
+}
+
+
+def test_ctftime_event_parsing():
+    from zoneinfo import ZoneInfo
+
+    from snipe.scanner import _parse_ctftime_event
+
+    item = _parse_ctftime_event(CTFTIME_EVENT, ZoneInfo("Asia/Kolkata"))
+    assert (item.category, item.trusted, item.source) == ("ctf", True, "CTFtime")
+    assert item.when == "Sat 17 Oct, 23:30 IST · 1 day 12 h"
+    assert item.tags == "Jeopardy · weight 85 · Open to all"
+    assert item.snippet == "Annual quals."
+    assert item.prize == ""  # empty in the fixture
+    assert _parse_ctftime_event({**CTFTIME_EVENT, "prizes": "TBA"}, ZoneInfo("Asia/Kolkata")).prize == ""
+    assert _parse_ctftime_event({**CTFTIME_EVENT, "prizes": "$500 + swag"}, ZoneInfo("Asia/Kolkata")).prize == "$500 + swag"
+    assert (item.mode, item.location, item.city) == ("online", "Online", "")
+    assert item.website == "https://ctf.securinets.tn/" and item.organizer == "Securinets"
+    assert str(item.deadline_date) == "2026-10-17" and item.starts_at.hour == 18
+
+    onsite = _parse_ctftime_event({**CTFTIME_EVENT, "onsite": True, "location": "Chennai, Tamil Nadu"},
+                                  ZoneInfo("Asia/Kolkata"))
+    assert (onsite.mode, onsite.city, onsite.location) == ("offline", "Chennai, Tamil Nadu", "Chennai, Tamil Nadu")
+
+
+@respx.mock
+def test_ctftime_api_skips_prequalified_and_replaces_rss(make_config):
+    config = make_config("""
+        sources:
+          ctftime: {enabled: true}
+          rss: [{name: CTFtime, url: "https://ctftime.org/event/list/upcoming/rss/"}]
+    """)
+    rss = respx.get("https://ctftime.org/event/list/upcoming/rss/").respond(text=CTF_RSS)
+    respx.get(scanner_mod.CTFTIME_API).respond(json=[
+        CTFTIME_EVENT, {**CTFTIME_EVENT, "title": "Finals", "ctftime_url": "https://ctftime.org/event/9/",
+                        "restrictions": "Prequalified"},
+    ])
+    report = Scanner(config).scan()
+    assert [i.title for i in report.items] == ["Securinets CTF Quals 2026"]
+    assert not rss.called  # the API covers it
+
+
+@pytest.mark.parametrize("title", ["Blackout CTF", "Capture The Flag 2.0", "Crewmate ctf"])
+def test_unstop_ctfs_are_tagged_ctf(title):
+    item = _parse_unstop_entry(unstop_entry(title=title), "hackathon", "Unstop", NOW)
+    assert item.category == "ctf"
+
+
+def test_unstop_ctf_detection_needs_a_whole_word():
+    assert _parse_unstop_entry(unstop_entry(title="ICTF Fintech Hack"), "hackathon", "Unstop", NOW).category == "hackathon"
+
+
+@respx.mock
+def test_unstop_keyword_search(make_config, no_sleep):
+    config = make_config("sources: {unstop: {enabled: true, types: [], search_terms: [ctf]}}")
+    route = respx.get(UNSTOP_API).respond(json=unstop_page([
+        unstop_entry(title="Pinaka CTF", type="competitions", seo_url="https://unstop.com/c/pinaka"),
+        unstop_entry(title="Cyber Quiz", type="quizzes", seo_url="https://unstop.com/q/quiz"),
+    ]))
+    report = Scanner(config).scan()
+    assert route.calls[0].request.url.params["searchTerm"] == "ctf"
+    assert {(i.title, i.category) for i in report.items} == {("Pinaka CTF", "ctf"), ("Cyber Quiz", "competition")}

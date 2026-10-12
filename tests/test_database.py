@@ -22,7 +22,7 @@ def test_v0_database_is_migrated(tmp_path):
     assert db.get_categories(1) == ["hackathon", "ctf", "event"]
     assert db.seen_count("sent") == 2  # existing rows default to "sent"; the B duplicate collapsed
     assert db.is_seen("https://a.example/x") and db.is_seen("https://b.example/y")
-    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 3
 
     db.toggle_category(1, "event")
     db.close()

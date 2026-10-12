@@ -97,7 +97,20 @@ Every subscriber tunes Snipe for themselves — nothing here affects anyone else
 
 Filters only drop an alert when they *know* it doesn't fit — an item with no location info still reaches an "online only" user rather than vanishing. Location, stipend, and deadline data come from Unstop and LinkedIn; RSS and web results rarely include them.
 
+## CTFs 🚩
+
+Snipe is tuned to catch every CTF worth playing:
+
+- **CTFtime API** — the official CTF calendar, with start time (in your timezone), duration, format (Jeopardy / Attack-Defense), CTFtime weight, online vs on-site + city, who can enter, prizes, and both the registration and CTFtime links. Prequalified finals are skipped.
+- **Unstop keyword search** — Indian college CTFs that never make it to CTFtime (they're filed under hackathons/competitions, so Snipe searches for "ctf" / "capture the flag" and tags them 🚩).
+- **r/securityCTF** — community announcements, filtered by the LLM.
+- **"Starts soon" reminders** — about a day before any CTF you were alerted about begins (toggle in `/settings`).
+
+Set `/filter` to CTF only and `/city Chennai` to get online CTFs plus on-site ones in your city.
+
 ## LinkedIn events
+
+**Off by default.** Tested in Oct 2026, no-login LinkedIn scrapers return 0–1 events per query: LinkedIn blocks search engines (Google, Bing, DuckDuckGo, Yandex, …) from reading event pages, so there's nothing for them to find. The integration below is kept in case that changes.
 
 LinkedIn puts event pages behind a login wall and blocks search engines from indexing their details, so Snipe gets them through the [LinkedIn Events Scraper](https://apify.com/maximedupre/linkedin-events) on Apify, which reads public event data without a LinkedIn account. Your own LinkedIn account is never used.
 
@@ -210,7 +223,8 @@ docker run -d --env-file .env -v snipe-data:/data snipe
 - **Groq API** (gpt-oss-20b) — opportunity classification
 - **Unstop API** — hackathons, competitions, internships, scholarships
 - **Apify** — LinkedIn event details
-- **CTFtime** — CTF event feed
+- **CTFtime API** — CTF calendar
+- **Reddit RSS** — r/securityCTF announcements
 - **DuckDuckGo (ddgs)** — live web search
 - **SQLite** — persistence
 - **APScheduler** — automated scanning

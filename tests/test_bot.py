@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from telegram.error import Forbidden
@@ -43,7 +44,8 @@ class FakeFormatter:
 def clock(monkeypatch):
     """Pin the bot's clock (defaults to noon, outside the default 23:00–07:00 quiet hours)."""
     state = {"now": datetime(2026, 10, 12, 12, 0)}
-    monkeypatch.setattr(bot_mod, "_now", lambda config: state["now"])
+    # Naive test times are read in the bot's timezone, like the real clock
+    monkeypatch.setattr(bot_mod, "_now", lambda config: state["now"].replace(tzinfo=config.timezone))
     return state
 
 
@@ -210,3 +212,43 @@ def test_shutdown_after_failed_startup_does_not_mask_the_error(tmp_path, make_co
     config = make_config("", TELEGRAM_TOKEN="123:abc", GROQ_API_KEY="k", SNIPE_DB_PATH=str(tmp_path / "x.db"))
     app = create_app(config)
     asyncio.run(app.post_shutdown(app))  # post_init never ran, so the scheduler never started
+
+
+def test_ctf_reminder_sent_a_day_before(app, clock):
+    from datetime import timedelta
+
+    start = datetime(2026, 10, 15, 18, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    a = app([result("ctf PwnFest", 1)])
+    a.bot_data["formatter"].format_alert = lambda item: Alert(
+        "alert: PwnFest", "ctf", compact="• PwnFest", text="PwnFest", starts_at=start, url=item.url)
+    db = a.bot_data["db"]
+    db.add_subscriber(1)
+    db.add_subscriber(2)
+    db.save_settings(2, UserSettings(ctf_reminders=False))
+
+    clock["now"] = (start - timedelta(days=3)).replace(tzinfo=None)
+    asyncio.run(run_scan(a))
+    assert sorted(c for c, _ in a.bot.sent) == [1, 2]
+    a.bot.sent.clear()
+
+    clock["now"] = (start - timedelta(hours=30)).replace(tzinfo=None)
+    asyncio.run(flush_queues(a))
+    assert a.bot.sent == []  # not yet within 24 h
+
+    clock["now"] = (start - timedelta(hours=20)).replace(tzinfo=None)
+    asyncio.run(flush_queues(a))
+    assert a.bot.sent == [(1, "⏰ <b>Starting soon</b> — 1 CTF you were alerted about\n\n• PwnFest\n⏳ starts in about 20 h")]
+
+    asyncio.run(flush_queues(a))
+    assert len(a.bot.sent) == 1  # sent once
+
+
+def test_no_reminder_for_ctf_starting_too_soon(app, clock):
+    from datetime import timedelta
+
+    start = clock["now"].replace(tzinfo=ZoneInfo("Asia/Kolkata")) + timedelta(hours=10)
+    a = app([result("ctf Soon", 1)])
+    a.bot_data["formatter"].format_alert = lambda item: Alert("m", "ctf", compact="c", starts_at=start, url=item.url)
+    a.bot_data["db"].add_subscriber(1)
+    asyncio.run(run_scan(a))
+    assert a.bot_data["db"].reminders_before(start) == []
