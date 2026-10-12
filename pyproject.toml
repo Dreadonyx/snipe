@@ -1,0 +1,20 @@
+[project]
+name = "snipe"
+dynamic = ["version"]
+description = "Telegram bot that hunts down hackathons, internships, fellowships, CTFs, competitions, and LinkedIn events."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["snipe"]

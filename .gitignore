@@ -20,3 +20,7 @@ venv/
 .vscode/
 *.swp
 *.swo
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
