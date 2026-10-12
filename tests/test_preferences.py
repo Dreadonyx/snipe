@@ -107,3 +107,13 @@ def test_settings_buttons_cycle():
     assert not s.paid_only and s.min_stipend == 0
     apply_setting_tap(s, "days", now)
     assert s.min_days_left == 2
+
+
+def test_ctf_format_is_matchable_by_interests_and_mutes(make_config):
+    from snipe.formatter import Formatter
+    from snipe.scanner import ScanResult
+
+    alert = Formatter(make_config(""), client=object()).format_alert(ScanResult(
+        title="PwnFest", url="https://ctftime.org/event/1", trusted=True, category="ctf", tags="Attack-Defense · Open to all"))
+    assert wants(UserSettings(interests=["attack-defense"]), alert, TODAY)
+    assert not wants(UserSettings(muted=["attack-defense"]), alert, TODAY)

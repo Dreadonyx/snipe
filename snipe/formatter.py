@@ -149,7 +149,7 @@ def _make_alert(item, name: str, one_line: str, category: str) -> Alert:
         message=_render(item, name, one_line, category),
         category=category,
         compact=_render_compact(item, name, category),
-        text=" ".join([name, item.title, item.snippet, one_line, item.organizer]),
+        text=" ".join([name, item.title, item.snippet, one_line, item.organizer, item.tags]),
         mode=item.mode,
         city=item.city,
         paid=item.paid,
