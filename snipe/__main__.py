@@ -43,7 +43,8 @@ def main():
 
     print(f"  ⏱  Scan interval: {config.scan_interval} minutes")
     print(f"  📍 Profile: {config.profile.get('type', 'student')} in {config.profile.get('location', 'India')}")
-    extra = [name for name, on in [("Unstop", config.unstop.get("enabled")), ("LinkedIn", config.linkedin["enabled"])] if on]
+    extra = [name for name, on in [("CTFtime", config.ctftime["enabled"]), ("Unstop", config.unstop.get("enabled")),
+                                   ("LinkedIn", config.linkedin["enabled"])] if on]
     print(f"  📡 Sources: {len(config.sources.get('rss', []))} RSS + {len(config.sources.get('search_queries', []))} search queries"
           + (f" + {' + '.join(extra)}" if extra else ""))
     if config.linkedin["enabled"] and not config.apify_token:
