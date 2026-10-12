@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from .config import CATEGORIES
@@ -91,6 +92,18 @@ class Database:
                 CREATE INDEX IF NOT EXISTS queue_chat ON queue (chat_id);
             """)
             self.conn.execute("PRAGMA user_version = 2")
+        if version < 3:
+            # v3: "starts soon" reminders for CTFs with a known start time
+            self.conn.executescript("""
+                CREATE TABLE IF NOT EXISTS reminders (
+                    chat_id INTEGER NOT NULL,
+                    url TEXT NOT NULL,
+                    starts_at TEXT NOT NULL,   -- ISO 8601 with offset
+                    compact TEXT NOT NULL,
+                    PRIMARY KEY (chat_id, url)
+                );
+            """)
+            self.conn.execute("PRAGMA user_version = 3")
         self.conn.commit()
 
     def _ensure_columns(self, table: str, columns: dict[str, str]):
@@ -219,6 +232,24 @@ class Database:
 
     def drop_queued(self, ids: list[int]):
         self.conn.executemany("DELETE FROM queue WHERE id = ?", [(i,) for i in ids])
+        self.conn.commit()
+
+    # ── Reminders ────────────────────────────────────────────
+
+    def add_reminder(self, chat_id: int, url: str, starts_at: datetime, compact: str):
+        self.conn.execute(
+            "INSERT OR IGNORE INTO reminders (chat_id, url, starts_at, compact) VALUES (?, ?, ?, ?)",
+            (chat_id, url, starts_at.isoformat(), compact),
+        )
+        self.conn.commit()
+
+    def reminders_before(self, cutoff: datetime) -> list[sqlite3.Row]:
+        """All reminders for events starting before `cutoff` (including ones already past)."""
+        rows = self.conn.execute("SELECT rowid, chat_id, url, starts_at, compact FROM reminders").fetchall()
+        return [r for r in rows if datetime.fromisoformat(r["starts_at"]) <= cutoff]
+
+    def drop_reminders(self, rowids: list[int]):
+        self.conn.executemany("DELETE FROM reminders WHERE rowid = ?", [(i,) for i in rowids])
         self.conn.commit()
 
     # ── Scan log ─────────────────────────────────────────────

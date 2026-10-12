@@ -36,6 +36,12 @@ CATEGORY_LABELS = {
     "event": "📅 Event / Workshop",
 }
 
+CTFTIME_DEFAULTS = {
+    "enabled": True,
+    "days_ahead": 45,
+    "skip_restrictions": ["Prequalified"],  # finals you can't enter without qualifying
+}
+
 LINKEDIN_DEFAULTS = {
     "enabled": False,
     "actor": "maximedupre~linkedin-events",
@@ -80,6 +86,7 @@ class Config:
         self.sources: dict = self._data.get("sources", {})
         self.unstop: dict = self.sources.get("unstop", {})
         self.linkedin: dict = {**LINKEDIN_DEFAULTS, **(self.sources.get("linkedin") or {})}
+        self.ctftime: dict = {**CTFTIME_DEFAULTS, **(self.sources.get("ctftime") or {})}
 
     def validate(self):
         """Raise ValueError if required config is missing."""

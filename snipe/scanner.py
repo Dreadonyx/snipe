@@ -25,6 +25,11 @@ TIMEOUT = httpx.Timeout(15.0)
 MAX_SOURCE_FAILURES = 3
 SOURCE_BACKOFF = 3600  # seconds a failing source sits out before it is retried
 
+CTFTIME_API = "https://ctftime.org/api/v1/events/"
+CTF_RE = re.compile(r"\bctf\b|capture[ -]the[ -]flag", re.IGNORECASE)
+CTF_RESTRICTIONS = {"Open": "Open to all", "Academic": "Students only", "High-school": "High school"}
+PLACEHOLDER_RE = re.compile(r"^(tba|tbd|n/?a|none|no prizes?|-+|\?+|coming soon)\.?$", re.IGNORECASE)
+
 UNSTOP_API = "https://unstop.com/api/public/opportunity/search-result"
 UNSTOP_PER_PAGE = 15
 UNSTOP_PAGE_DELAY = 0.5  # seconds between paginated requests
@@ -35,6 +40,9 @@ UNSTOP_TYPE_MAP = {
     "competitions": "competition",
     "internships": "internship",
     "scholarships": "grant",
+    "quizzes": "competition",
+    "workshops": "event",
+    "conferences": "event",
 }
 CURRENCY_SYMBOLS = {"fa-rupee": "₹", "fa-dollar": "$", "fa-euro": "€"}
 
@@ -64,6 +72,9 @@ class ScanResult:
     paid: bool | None = None        # internships only
     stipend: int = 0                # highest monthly stipend, internships only
     deadline_date: date | None = None
+    starts_at: datetime | None = None   # exact start time (CTFtime) — powers "starts soon" reminders
+    website: str = ""                   # official site, when url is a listing page (e.g. CTFtime)
+    tags: str = ""                      # short facts line, e.g. "Jeopardy · weight 85 · Open to all"
 
 
 @dataclass
@@ -124,9 +135,15 @@ class Scanner:
 
     def _build_tasks(self, client: httpx.Client) -> list[tuple[str, Callable[[], list[ScanResult]]]]:
         tasks = []
+        ctftime_api = self.config.ctftime["enabled"]
+        if ctftime_api:
+            tasks.append(("CTFtime", lambda: self._scan_ctftime_api(client)))
+
         for source in self.config.sources.get("rss", []):
             name = source.get("name", source.get("url", "unknown"))
             url = source["url"]
+            if "ctftime.org" in url and ctftime_api:
+                continue  # the API covers the same events with full details
             if "ctftime.org" in url:
                 tasks.append((name, lambda u=url, n=name: self._scan_ctftime(client, u, n)))
             else:
@@ -138,6 +155,7 @@ class Scanner:
                 client,
                 types=unstop_cfg.get("types", list(UNSTOP_TYPE_MAP)),
                 max_pages=unstop_cfg.get("max_pages", 2),
+                search_terms=unstop_cfg.get("search_terms", ["ctf", "capture the flag"]),
             )))
 
         if self._linkedin_due():
@@ -191,12 +209,32 @@ class Scanner:
         return items
 
     def _scan_unstop_paginated(
-        self, client: httpx.Client, types: list[str], max_pages: int = 2,
+        self, client: httpx.Client, types: list[str], max_pages: int = 2, search_terms: list[str] = (),
     ) -> list[ScanResult]:
-        """Scan Unstop search API across multiple opportunity types with pagination."""
+        """Scan Unstop search API across opportunity types (paginated) and keyword searches."""
         by_type: list[list[ScanResult]] = []
         failed_types = 0
         now = datetime.now(UTC)
+
+        # Keyword searches first (one page each): most Indian college CTFs live only on Unstop,
+        # filed under hackathons/competitions where a type scan's per-page cap can miss them.
+        for term in search_terms:
+            try:
+                resp = self._get(client, UNSTOP_API, params={
+                    "opportunity": "all", "oppstatus": "open", "searchTerm": term,
+                    "sort": "newest", "per_page": UNSTOP_PER_PAGE, "page": 1,
+                })
+                entries = resp.json().get("data", {}).get("data", []) or []
+            except Exception as e:
+                logger.warning("Unstop search %r failed: %s", term, e)
+                continue
+            found = []
+            for entry in entries:
+                default = UNSTOP_TYPE_MAP.get(entry.get("type"), "competition")
+                item = _parse_unstop_entry(entry, default, f"Unstop ({term})", now)
+                if item:
+                    found.append(item)
+            by_type.append(found)
 
         for opp_type in types:
             type_items: list[ScanResult] = []
@@ -236,7 +274,7 @@ class Scanner:
 
             by_type.append(type_items)
 
-        if types and failed_types == len(types):
+        if types and failed_types == len(types) and not any(by_type):
             raise RuntimeError("Unstop unreachable for every opportunity type")
 
         # Interleave types so a per-scan alert cap doesn't fill up with hackathons alone
@@ -260,6 +298,21 @@ class Scanner:
                     title=title, url=link, snippet=snippet,
                     source=source, category="ctf", curated=True, trusted=True,
                 ))
+        return items
+
+    def _scan_ctftime_api(self, client: httpx.Client) -> list[ScanResult]:
+        """Upcoming CTFs from CTFtime's JSON API, with format, weight, location, and exact start."""
+        cfg = self.config.ctftime
+        now = int(time.time())
+        resp = self._get(client, CTFTIME_API, params={
+            "limit": 100, "start": now, "finish": now + cfg["days_ahead"] * 86400,
+        })
+        skip = set(cfg["skip_restrictions"])
+        items = [
+            item for e in resp.json()
+            if e.get("restrictions") not in skip and (item := _parse_ctftime_event(e, self.config.timezone))
+        ]
+        logger.info("CTFtime: %d upcoming CTFs", len(items))
         return items
 
     # ── LinkedIn events ──────────────────────────────────────
@@ -429,6 +482,8 @@ def _parse_unstop_entry(entry: dict, category: str, source: str, now: datetime) 
     # Internships have type=jobs, subtype=internships
     if entry.get("type") == "jobs" and entry.get("subtype") == "internships":
         category = "internship"
+    if CTF_RE.search(title):
+        category = "ctf"  # Unstop files CTFs under hackathons/competitions
 
     prize = ""
     cash = sum(p.get("cash") or 0 for p in entry.get("prizes") or [])
@@ -464,6 +519,61 @@ def _parse_unstop_entry(entry: dict, category: str, source: str, now: datetime) 
         paid=paid if category == "internship" else None,
         stipend=int(job.get("max_salary") or 0) if paid and job.get("show_salary") else 0,
         deadline_date=deadline_date,
+    )
+
+
+def _fmt_duration(d: dict) -> str:
+    days, hours = d.get("days") or 0, d.get("hours") or 0
+    parts = [f"{days} day{'s' if days != 1 else ''}" if days else "", f"{hours} h" if hours else ""]
+    return " ".join(p for p in parts if p)
+
+
+def _parse_ctftime_event(e: dict, tz) -> ScanResult | None:
+    title = (e.get("title") or "").strip()
+    page = e.get("ctftime_url") or ""
+    try:
+        start = datetime.fromisoformat(e["start"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not title or not page:
+        return None
+
+    local = start.astimezone(tz)
+    when = f"{local:%a %d %b, %H:%M} {local.tzname()}"
+    if duration := _fmt_duration(e.get("duration") or {}):
+        when += f" · {duration}"
+
+    info = [e.get("format") or ""]
+    if e.get("weight"):
+        info.append(f"weight {e['weight']:.0f}")
+    restriction = e.get("restrictions") or ""
+    info.append(CTF_RESTRICTIONS.get(restriction, restriction))
+    description = " ".join((e.get("description") or "").split())
+
+    onsite = bool(e.get("onsite"))
+    location = " ".join((e.get("location") or "").split())[:80]
+    prize = " ".join((e.get("prizes") or "").split())
+    if PLACEHOLDER_RE.match(prize):
+        prize = ""
+    organizers = e.get("organizers") or []
+    return ScanResult(
+        title=title,
+        url=page,
+        snippet=description,
+        tags=" · ".join(i for i in info if i),
+        source="CTFtime",
+        category="ctf",
+        curated=True,
+        trusted=True,
+        when=when,
+        location=(location or "On-site") if onsite else "Online",
+        prize=prize[:80] + ("…" if len(prize) > 80 else ""),
+        organizer=organizers[0].get("name", "") if organizers else "",
+        mode="offline" if onsite else "online",
+        city=location if onsite else "",
+        deadline_date=local.date(),  # registration usually closes when the CTF starts
+        starts_at=start,
+        website=e.get("url") or "",
     )
 
 

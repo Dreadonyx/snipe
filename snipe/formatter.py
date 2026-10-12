@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from groq import Groq
 
@@ -42,6 +42,8 @@ class Alert:
     paid: bool | None = None
     stipend: int = 0
     deadline_date: date | None = None
+    starts_at: datetime | None = None  # for "starts soon" reminders
+    url: str = ""
 
 
 class Formatter:
@@ -153,16 +155,20 @@ def _make_alert(item, name: str, one_line: str, category: str) -> Alert:
         paid=item.paid,
         stipend=item.stipend,
         deadline_date=item.deadline_date,
+        starts_at=item.starts_at,
+        url=item.url,
     )
 
 
 def _render_compact(item, name: str, category: str) -> str:
     esc = html.escape
-    facts = [f"⏰ {item.deadline}" if item.deadline else "", f"📆 {item.when}" if item.when else "",
+    facts = [f"🎯 {item.tags}" if item.tags else "",
+             f"⏰ {item.deadline}" if item.deadline else "", f"📆 {item.when}" if item.when else "",
              f"💰 {item.prize}" if item.prize else "", f"📍 {item.location}" if item.location else ""]
     line = f'{CATEGORY_EMOJI.get(category, "🎯")} <b><a href="{esc(item.url, quote=True)}">{esc(name)}</a></b>'
-    details = " · ".join(esc(f) for f in facts if f)
-    return f"{line}\n{details}" if details else line
+    # CTF facts get their own line; the rest share one
+    tags, rest = (esc(facts[0]) if facts[0] else ""), " · ".join(esc(f) for f in facts[1:] if f)
+    return "\n".join(part for part in (line, tags, rest) if part)
 
 
 def render_batch(header: str, entries: list[str], limit: int = 4000) -> list[str]:
@@ -188,6 +194,8 @@ def _render(item, name: str, one_line: str, category: str) -> str:
     if one_line:
         lines.append(esc(one_line))
     lines.append("")
+    if item.tags:
+        lines.append(f"🎯 {esc(item.tags)}")
     for emoji, label, value in [
         ("🏢", "By", item.organizer),
         ("📆", "When", item.when),
@@ -198,6 +206,10 @@ def _render(item, name: str, one_line: str, category: str) -> str:
         if value:
             lines.append(f"{emoji} <b>{label}:</b> {esc(value)}")
     lines.append(f"📡 <b>Source:</b> {esc(item.source)}")
-    action = "Register here" if category == "event" else "Apply here"
-    lines.append(f'🔗 <a href="{esc(item.url, quote=True)}">{action}</a>')
+    if item.website:  # url is a listing page (CTFtime); link the event's own site too
+        lines.append(f'🔗 <a href="{esc(item.website, quote=True)}">Register</a> · '
+                     f'<a href="{esc(item.url, quote=True)}">{esc(item.source)}</a>')
+    else:
+        action = "Register here" if category in ("event", "ctf") else "Apply here"
+        lines.append(f'🔗 <a href="{esc(item.url, quote=True)}">{action}</a>')
     return "\n".join(lines)

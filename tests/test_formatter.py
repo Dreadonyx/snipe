@@ -113,3 +113,10 @@ def test_render_batch_splits_under_telegram_limit():
     assert len(messages) > 1 and all(len(m) <= 4000 for m in messages)
     assert messages[0].startswith("HEADER")
     assert sum(m.count("entry ") for m in messages) == 40
+
+
+def test_ctf_alert_links_official_site_and_listing(formatter):
+    fmt, _ = formatter()
+    alert = fmt.format_alert(item(trusted=True, category="ctf", source="CTFtime", url="https://ctftime.org/event/1",
+                                  website="https://ctf.example.org/"))
+    assert '<a href="https://ctf.example.org/">Register</a> · <a href="https://ctftime.org/event/1">CTFtime</a>' in alert.message

@@ -39,10 +39,19 @@ opportunity_keywords:
   - attack-defense
 
 sources:
+  # ── CTFtime (official CTF calendar, JSON API) ─────────────
+  ctftime:
+    enabled: true
+    days_ahead: 45                       # how far ahead to look
+    skip_restrictions: [Prequalified]    # finals you can't enter without qualifying
+
   # ── Unstop (dedicated paginated scanner) ──────────────────
   unstop:
     enabled: true
     max_pages: 2            # pages per type per scan cycle (15 items/page, newest first)
+    search_terms:           # keyword searches; most Indian college CTFs are only on Unstop
+      - ctf
+      - capture the flag
     types:
       - hackathons
       - competitions
@@ -53,8 +62,10 @@ sources:
   # LinkedIn hides event details behind a login wall, so details come from the
   # Apify actor "maximedupre/linkedin-events" (pay per event, ~$2.70 / 1,000).
   # Set APIFY_TOKEN in .env. Without it you still get event links, minus details.
+  # Off by default: no-login scrapers find almost nothing (LinkedIn blocks search
+  # engines from event pages). Tested Oct 2026: 0-1 events per query.
   linkedin:
-    enabled: true
+    enabled: false
     interval_hours: 12      # LinkedIn runs are slow and billed, so not every scan
     max_charge_usd: 0.05    # hard spending cap per run, split across queries
     event_format: any       # any | virtual | in_person | hybrid
@@ -72,8 +83,8 @@ sources:
       url: "https://inc42.com/feed/"
     - name: "HackerNews"
       url: "https://news.ycombinator.com/rss"
-    - name: "CTFtime"
-      url: "https://ctftime.org/event/list/upcoming/rss/"
+    - name: "r/securityCTF"
+      url: "https://www.reddit.com/r/securityCTF/new/.rss"
 
   search_queries:
     - "hackathon India students 2026 open registration"

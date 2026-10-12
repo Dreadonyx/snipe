@@ -31,6 +31,7 @@ class UserSettings:
     quiet_start: int | None = 23                        # hours in the bot's timezone; None = off
     quiet_end: int | None = 7
     last_digest: str = ""                               # ISO date of the last digest sent
+    ctf_reminders: bool = True                          # ping ~a day before an alerted CTF starts
 
     @classmethod
     def from_dict(cls, data: dict) -> "UserSettings":

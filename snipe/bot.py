@@ -36,6 +36,7 @@ SCAN_COOLDOWN = 300  # seconds
 LLM_CALLS_PER_ALERT = 4  # LLM budget per scan = this × max_alerts_per_scan
 FIRST_SCAN_DELAY = 30  # seconds after startup
 BATCH_THRESHOLD = 3  # more alerts than this for one user in one go → a single combined message
+REMINDER_LEAD = timedelta(hours=24)  # "starts soon" ping this long before a CTF begins
 
 BOT_COMMANDS = [
     ("start", "Activate alerts"),
@@ -139,6 +140,7 @@ def _settings_keyboard(s: UserSettings) -> InlineKeyboardMarkup:
         ("quiet", f"🌙 Quiet hours: {lbl['quiet']}"),
         ("location", f"📍 Location: {lbl['location']}"),
         ("paid", f"💼 Paid internships only: {'On' if s.paid_only else 'Off'}"),
+        ("reminders", f"⏰ CTF reminders (day before): {'On' if s.ctf_reminders else 'Off'}"),
         ("days", f"⏳ Hide if closing within: {lbl['days']}"),
     ]
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=f"set:{key}")] for key, text in rows])
@@ -300,6 +302,8 @@ def apply_setting_tap(s: UserSettings, key: str, now: datetime) -> UserSettings:
             s.min_stipend = 0
     elif key == "days":
         s.min_days_left = next_in_cycle(DEADLINE_PRESETS, s.min_days_left)
+    elif key == "reminders":
+        s.ctf_reminders = not s.ctf_reminders
     return s
 
 
@@ -545,9 +549,15 @@ async def _scan_and_broadcast(app: Application) -> ScanOutcome:
                 pending[chat_id].append(alert)
 
     # Deliver per user, after the loop, so many finds become one message instead of a flood
-    hour = _now(config).hour
+    now = _now(config)
+    hour = now.hour
     for chat_id, alerts in pending.items():
         s = settings[chat_id]
+        if s.ctf_reminders:
+            for a in alerts:
+                # Skip events starting so soon that the reminder would land right after the alert
+                if a.starts_at and a.starts_at - now > REMINDER_LEAD + timedelta(hours=6):
+                    db.add_reminder(chat_id, a.url, a.starts_at, a.compact)
         entries = [(a.message, a.compact) for a in alerts]
         if s.delivery == "digest" or in_quiet_hours(s, hour):
             for message, compact in entries:
@@ -577,6 +587,7 @@ async def flush_queues(app: Application):
     config: Config = app.bot_data["config"]
     now = _now(config)
     today = now.date().isoformat()
+    await _send_reminders(app, db, now)
 
     for chat_id in db.queued_chat_ids():
         rows = db.peek_queue(chat_id)
@@ -601,6 +612,33 @@ async def flush_queues(app: Application):
             if s.delivery == "digest":
                 s.last_digest = today
                 db.save_settings(chat_id, s)
+
+
+async def _send_reminders(app: Application, db: Database, now: datetime):
+    """One "starting soon" message per user for CTFs beginning within REMINDER_LEAD."""
+    due: dict[int, list] = defaultdict(list)
+    expired = []
+    for r in db.reminders_before(now + REMINDER_LEAD):
+        (expired if datetime.fromisoformat(r["starts_at"]) <= now else due[r["chat_id"]]).append(r)
+    db.drop_reminders([r["rowid"] for r in expired])
+
+    for chat_id, rows in due.items():
+        s = db.get_settings(chat_id)
+        if not db.is_subscribed(chat_id) or not s.ctf_reminders:
+            db.drop_reminders([r["rowid"] for r in rows])
+            continue
+        if in_quiet_hours(s, now.hour):
+            continue  # try again next hour
+        entries = []
+        for r in sorted(rows, key=lambda r: r["starts_at"]):
+            hours = max(1, round((datetime.fromisoformat(r["starts_at"]) - now).total_seconds() / 3600))
+            entries.append(f"{r['compact']}\n⏳ starts in about {hours} h")
+        header = f"⏰ <b>Starting soon</b> — {len(rows)} CTF{'s' if len(rows) != 1 else ''} you were alerted about"
+        sent = True
+        for chunk in render_batch(header, entries):
+            sent = sent and await _send(app, db, chat_id, chunk, preview=False)
+        if sent:
+            db.drop_reminders([r["rowid"] for r in rows])
 
 
 async def _deliver_now(

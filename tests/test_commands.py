@@ -88,7 +88,7 @@ def test_settings_menu_and_buttons(chat):
     text, keyboard = chat.replies[-1]
     assert "Quiet hours: <b>23:00–07:00</b>" in text
     assert [row[0].callback_data for row in keyboard.inline_keyboard] == [
-        "set:delivery", "set:quiet", "set:location", "set:paid", "set:days"]
+        "set:delivery", "set:quiet", "set:location", "set:paid", "set:reminders", "set:days"]
 
     text, keyboard = chat.tap("delivery")
     assert chat.settings.delivery == "digest" and "Daily digest at 08:00" in text
@@ -101,3 +101,9 @@ def test_settings_menu_and_buttons(chat):
 def test_commands_require_subscription(chat):
     chat.db.remove_subscriber(42)
     assert chat.run(bot_mod.cmd_settings) == "Send /start first to activate Snipe."
+
+
+def test_reminders_toggle(chat):
+    text, _ = chat.tap("reminders")
+    assert chat.settings.ctf_reminders is False
+    assert "CTF reminders" in str(chat.replies[-1][1].inline_keyboard)
