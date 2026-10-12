@@ -54,13 +54,14 @@ class Database:
             );
         """)
 
+        # Columns added after the first release. Checked on every start (not gated on
+        # user_version) because CREATE TABLE IF NOT EXISTS never alters an existing table.
+        self._ensure_columns("seen", {"category": "TEXT DEFAULT 'other'", "status": "TEXT DEFAULT 'sent'"})
+
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         if version < 1:
             # v1: remember LLM rejections so they aren't re-classified every scan,
             # and opt existing subscribers into the new "event" category.
-            columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(seen)")}
-            if "status" not in columns:
-                self.conn.execute("ALTER TABLE seen ADD COLUMN status TEXT DEFAULT 'sent'")
             # URLs are now normalized before dedup; rewrite old rows so they still match
             for row in self.conn.execute("SELECT url FROM seen").fetchall():
                 canonical = normalize_url(row["url"])
@@ -91,6 +92,12 @@ class Database:
             """)
             self.conn.execute("PRAGMA user_version = 2")
         self.conn.commit()
+
+    def _ensure_columns(self, table: str, columns: dict[str, str]):
+        existing = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns.items():
+            if name not in existing:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     # ── Seen items ───────────────────────────────────────────
 
