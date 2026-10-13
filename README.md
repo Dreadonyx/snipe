@@ -1,6 +1,6 @@
 # snipe 🎯
 
-[![CI](https://github.com/Dreadonyx/snipe/actions/workflows/ci.yml/badge.svg)](https://github.com/Dreadonyx/snipe/actions/workflows/ci.yml)
+[![CI](https://github.com/H3M4N1H/snipe/actions/workflows/ci.yml/badge.svg)](https://github.com/H3M4N1H/snipe/actions/workflows/ci.yml)
 
 > Telegram bot that hunts down hackathons, internships, fellowships, CTFs, competitions, and LinkedIn events — and texts you before the rest of the internet finds out.
 
@@ -122,7 +122,7 @@ LinkedIn puts event pages behind a login wall and blocks search engines from ind
 ## Setup
 
 ```bash
-git clone https://github.com/Dreadonyx/snipe
+git clone https://github.com/H3M4N1H/snipe
 cd snipe
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -202,7 +202,7 @@ snipe/
 ### Any Linux VM (Oracle Cloud, Google Cloud, a home server)
 
 ```bash
-git clone https://github.com/Dreadonyx/snipe && cd snipe
+git clone https://github.com/H3M4N1H/snipe && cd snipe
 cp .env.example .env && nano .env      # add your tokens
 bash deploy/install.sh                 # installs Docker, builds, runs with auto-restart
 ```
